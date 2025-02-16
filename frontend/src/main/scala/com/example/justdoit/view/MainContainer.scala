@@ -7,18 +7,20 @@ import com.example.justdoit.model.Msg
 import com.example.justdoit.view.components.Icons
 import tyrian.Elem
 import javax.swing.Icon
+import com.example.justdoit.model.Model
+import com.example.justdoit.view.components.Alert
+import com.example.justdoit.model.Model.Notification
 
 object MainContainer:
 
-  def navbar(isDark: Boolean, isLoggedIn: Boolean): Html[Msg] =
+  def navbar(isDark: Boolean): Html[Msg] =
     nav(cls := "bg-purple-600 dark:bg-purple-900 fixed w-full z-20 top-0 start-0 border-b border-gray-200 dark:border-gray-700")(
       div(cls := "flex flex-wrap items-center justify-between p-4")(
         a(href := "/", cls := "flex items-center")(
           img(src := "/assets/images/tyrian-horizontal.svg", cls := "h-12")
         ),
         div(cls := "flex")(
-          darkModeSwitchButton(isDark),
-          if isLoggedIn then controlButton(Msg.Logout, Icons.logout) else div()
+          darkModeSwitchButton(isDark)
         )
       )
     )
@@ -49,9 +51,16 @@ object MainContainer:
     val icon = if isDark then Icons.sun else Icons.moon
     controlButton(Msg.ToggleDarkMode, icon)
 
-  def apply(content: Html[Msg], isDark: Boolean, isLoggedIn: Boolean): Html[Msg] =
+  def apply(content: Html[Msg], state: Model): Html[Msg] =
+    val isDark = state.isDarkMode
+    val notification = state.homeState.notification.map {
+      case Notification.Info(text)    => Alert.info(text)
+      case Notification.Warning(text) => Alert.warning(text)
+    }.getOrElse(Alert.empty)
+
     div(cls := (if isDark then "dark" else "not-dark-mode"))(
-      navbar(isDark, isLoggedIn),
-      main(cls := "flex flex-col min-h-screen mt-20 bg-gray-200 dark:bg-gray-900")(content),
+      navbar(isDark),
+      main(cls := "flex flex-col justify-center items-center min-h-screen mt-20 bg-gray-200 dark:bg-gray-900")(content),
+      notification,
       theFooter
     )

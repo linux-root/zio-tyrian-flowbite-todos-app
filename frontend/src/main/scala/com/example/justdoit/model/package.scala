@@ -10,10 +10,15 @@ import zio.json.ast.Json
 import com.example.justdoit.page.*
 import com.example.justdoit.model.Model.User
 import com.example.justdoit.common.util.JwtHelper
-import com.example.justdoit.model.Model.LoginForm
-import com.example.justdoit.common.model.LoginFailure
+import com.example.justdoit.common.model.TodoItem
 import com.example.justdoit.model.Model.HomeState
-import com.example.justdoit.model.Model.emptyLoginForm
+import com.example.justdoit.common.model.TodoItem.Priority
+import java.time.LocalDateTime
+import com.example.justdoit.model.Model.TodoForm
+import com.example.justdoit.util.Datepicker
+import scala.scalajs.js.Date
+import com.example.justdoit.util.DatetimeHelper
+import com.example.justdoit.common.model.CreateTodo
 
 object model {
   enum Msg {
@@ -23,58 +28,73 @@ object model {
     case DoNavigate(page: Page)
     case UnhandledRoute(path: String)
     case GoToInternet(loc: Location.External)
+    case UpdateTodoList(items: List[TodoItem])
     case ToggleDarkMode
-
-    // with backend integration only
     case Error(msg: String)
-    case SendHttpRequestWithAccessToken(sendWithAccessToken: String => Cmd[Task, Msg])
-    case LoginSuccess(accessToken: String, refreshToken: String)
-    case LoginFailure(message: String)
-    case RestoredSession(accessToken: String, refreshToken: String)
-    case UpdateLoginForm(form: LoginForm)
-    case SubmitLogin
-    case GreetingFromBackend(text: String)
-    case NextBackendMessage
-    case Logout
+    case UpdateTodoForm(form: TodoForm)
+    case CreateTodo
+    case NewTodoCreated(todo: TodoItem)
+    case DeleteTodo(id: String)
+    case TodoDeleted(id: String)
+    case UpdateTodo(todo: common.model.UpdateTodo)
+    case TodoUpdated(todo: TodoItem)
+    case InitDatepicker(elementId: String)
+    case DismissNotification
   }
 
   /**
    * All frontend states is stored here
    */
-  case class Model(currentPage: Page, user: Option[User], loginForm: LoginForm, homeState: HomeState, isDarkMode: Boolean) {
+  case class Model(currentPage: Page, homeState: HomeState, isDarkMode: Boolean) {
     def toggleDarkMode: Model =
       copy(isDarkMode = !isDarkMode)
 
-    def isLoggedIn: Boolean = user.isDefined
-
     def navigateTo(page: Page): Model = copy(currentPage = page)
 
-    def loginSuccess(accessToken: String, refreshToken: String): Model =
-      JwtHelper.getUnverifiedUserClaim(accessToken).map(claim => User(claim.username, accessToken, refreshToken)) match
-        case Right(user) =>
-          this.copy(user = Some(user), loginForm = emptyLoginForm)
-        case Left(_) =>
-          this
-    def logout: Model = copy(user = None)
   }
 
   object Model {
     case class User(username: String, accessToken: String, refreshToken: String)
 
-    /**
-     * Store Login page state
-     */
-    case class LoginForm(username: String, password: String, error: Option[String], isLoading: Boolean) {
-      def isSubmitDisabled: Boolean = username.isBlank() || password.isBlank()
-    }
+    enum Notification(text: String):
+      case Warning(text: String) extends Notification(text)
+      case Info(text: String)    extends Notification(text)
 
     /**
      * Store Home page state
      */
-    case class HomeState(serverMessage: Option[String])
+    case class HomeState(todoItems: List[TodoItem], todoForm: TodoForm, notification: Option[Notification])
 
-    val emptyLoginForm = LoginForm("Scala", "nopassword", None, false)
-    val emptyHomeState = HomeState(None)
-    val init: Model    = Model(Page.Login, user = None, emptyLoginForm, emptyHomeState, isDarkMode = false)
+    case class TodoForm(text: String, priority: Priority, time: String, datepicker: Option[Datepicker]) {
+      private def addTimeToJsDate(date: Date, time: String): Date = {
+        val parts = time.split(":").map(_.toInt)
+        if (parts.length != 2) throw new IllegalArgumentException("Invalid time format, expected HH:mm")
+
+        val newDate = new Date(date.getTime()) // Clone to avoid modifying the original date
+        newDate.setHours(parts(0), parts(1), 0, 0) // Set hours and minutes, reset seconds and milliseconds
+        newDate
+      }
+      def getDate: String =
+        datepicker
+          .map(_.getDate())
+          .map(addTimeToJsDate(_, time))
+          .map(_.toDateString)
+          .getOrElse("datepicker is empty")
+
+      def dueTime: LocalDateTime =
+        datepicker
+          .map(_.getDate())
+          .map(addTimeToJsDate(_, time))
+          .map(DatetimeHelper.jsDateToLocalDateTime)
+          .get
+
+      def toPayload: CreateTodo =
+        CreateTodo(text, priority, dueTime)
+    }
+
+    val defaultTime    = "23:00"
+    val emptyTodoForm  = TodoForm("", Priority(isUrgent = false, isImportant = false), defaultTime, None)
+    val emptyHomeState = HomeState(Nil, emptyTodoForm, None)
+    val init: Model    = Model(Page.Home, emptyHomeState, isDarkMode = false)
   }
 }

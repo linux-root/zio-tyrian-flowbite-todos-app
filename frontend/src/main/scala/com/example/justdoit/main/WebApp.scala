@@ -18,6 +18,12 @@ import com.example.justdoit.util.*
 import com.example.justdoit.page.*
 import com.example.justdoit.util.LocalStorageHelper
 import com.example.justdoit.until.HttpHelper
+import cats.implicits._
+import cats.effect.kernel.Sync
+import zio.interop.catz.implicits._
+import com.example.justdoit.view.components.AddTodoForm
+import tyrian.cmds.Logger
+import com.example.justdoit.model.Model.Notification
 
 @JSImport("resources/index.css", JSImport.Default)
 @js.native
@@ -36,9 +42,6 @@ object WebApp extends TyrianZIOApp[Msg, Model]:
         case Route.Home(_) =>
           Msg.NavigateTo(Page.Home)
 
-        case Route.ComponentDemo(page) =>
-          Msg.NavigateTo(page)
-
         case path @ _ =>
           Msg.UnhandledRoute(path)
 
@@ -46,16 +49,26 @@ object WebApp extends TyrianZIOApp[Msg, Model]:
 
   def init(flags: Map[String, String]): (Model, Cmd[Task, Msg]) =
     val initState = Model.init
-    (initState, LocalStorageHelper.obtainSessionCmd)
+    (initState, Cmd.None)
 
   def update(model: Model): Msg => (Model, Cmd[Task, Msg]) =
     case Msg.NoOp => (model, Cmd.None)
+
+    case Msg.InitDatepicker(elementId) =>
+      val dp = new Datepicker(elementId)
+      (model.modify(_.homeState.todoForm.datepicker).setTo(Some(dp)), Cmd.None)
+
+    case Msg.UpdateTodoList(items) =>
+      (model.modify(_.homeState.todoItems).setTo(items), Cmd.None)
 
     case Msg.LogMessage(msg) =>
       (model, PrettyLogger.info(msg))
 
     case Msg.Error(msg) =>
-      (model, PrettyLogger.error(msg))
+      (model.modify(_.homeState.notification).setTo(Some(Notification.Warning(msg))), Cmd.None)
+
+    case Msg.DismissNotification =>
+      (model.modify(_.homeState.notification).setTo(None), Cmd.None)
 
     case Msg.ToggleDarkMode =>
       (model.toggleDarkMode, Cmd.None)
@@ -63,55 +76,59 @@ object WebApp extends TyrianZIOApp[Msg, Model]:
     case Msg.GoToInternet(loc) =>
       (model, Nav.loadUrl(loc.url))
 
-    case Msg.UpdateLoginForm(form) =>
-      (model.copy(loginForm = form), Cmd.None)
-
-    case Msg.SubmitLogin =>
-      val loginCmd = HttpHelper.login(model.loginForm.username, model.loginForm.password)
-      (model.modify(_.loginForm.isLoading).setTo(true), loginCmd)
-
     case Msg.NavigateTo(page) =>
-      val isLoginRequired = page.isSecured && !model.isLoggedIn
-      if (!isLoginRequired) {
-        (model.navigateTo(page), page.doNavigate(model))
-      } else (Model.init, Cmd.Emit(Msg.NavigateTo(Page.Login)))
+      (Model.init, page.doNavigate(model))
 
-    case Msg.RestoredSession(accessToken, refreshToken) =>
-      (model.loginSuccess(accessToken, refreshToken), Cmd.Emit(Msg.DoNavigate(Page.Home)))
+    case Msg.DeleteTodo(id) =>
+      (model, HttpHelper.deleteTodo(id))
 
-    case Msg.LoginSuccess(accessToken, refreshToken) =>
-      val saveTokenAndEnterHome = LocalStorageHelper.storeSession(accessToken, refreshToken) |+| Cmd.Emit(Msg.NavigateTo(Page.Home))
-      (model.loginSuccess(accessToken, refreshToken), saveTokenAndEnterHome)
-
-    case Msg.LoginFailure(msg) =>
-      (model.modify(_.loginForm.error).setTo(Some(msg)), Cmd.None)
-
-    case Msg.Logout =>
-      (model.logout, LocalStorageHelper.cleanStorageWhenLogout |+| Cmd.Emit(Msg.NavigateTo(Page.Login)))
+    case Msg.TodoDeleted(id) =>
+      (
+        model
+          .modify(_.homeState.todoItems)
+          .using(_.filterNot(_.id == id))
+          .modify(_.homeState.notification)
+          .setTo(Some(Notification.Info("Todo deleted"))),
+        Cmd.None
+      )
 
     case Msg.DoNavigate(page) =>
       (model.modify(_.currentPage).setTo(page), Nav.pushUrl[Task](page.path) |+| Flowbite.initCmd)
 
+    case Msg.UpdateTodoForm(form) =>
+      (model.modify(_.homeState.todoForm).setTo(form), Cmd.None)
+
+    case Msg.CreateTodo =>
+      (model, HttpHelper.createTodo(model.homeState.todoForm.toPayload))
+
+    case Msg.NewTodoCreated(item) =>
+      (
+        model
+          .modify(_.homeState.todoItems)
+          .using(_ :+ item)
+          .modify(_.homeState.notification)
+          .setTo(Some(Notification.Info("Todo created"))),
+        Flowbite.initCmd // To make sure new delete confirmation dialog is handled by FlowbiteJS
+      )
+
+    case Msg.UpdateTodo(todo) =>
+      (model, HttpHelper.updateTodo(todo))
+
+    case Msg.TodoUpdated(todo) =>
+      (
+        model
+          .modify(_.homeState.todoItems)
+          .using(todos => todos.map(x => if x.id == todo.id then todo else x))
+          .modify(_.homeState.notification)
+          .setTo(Some(Notification.Info("Todo updated"))),
+        Cmd.None
+      )
+
     case Msg.UnhandledRoute(path) =>
       (model, PrettyLogger.error("Unhandled route" + path))
 
-    case Msg.GreetingFromBackend(text) =>
-      (model.modify(_.homeState.serverMessage).setTo(Some(text)), PrettyLogger.info(text))
-
-    case Msg.NextBackendMessage =>
-      (model, HttpHelper.fetchServerMessage2)
-
-    case Msg.SendHttpRequestWithAccessToken(f) =>
-      val cmd = model.user match
-        case None =>
-          Cmd.Emit(Msg.DoNavigate(Page.Login))
-        case Some(User(_, accessToken, _)) =>
-          f(accessToken)
-
-      (model, cmd)
-
   def view(model: Model): Html[Msg] =
     val pageContent = model.currentPage.render(model)
-    MainContainer(pageContent, model.isDarkMode, model.isLoggedIn)
+    MainContainer(pageContent, model)
 
   def subscriptions(model: Model): Sub[Task, Msg] = Sub.None

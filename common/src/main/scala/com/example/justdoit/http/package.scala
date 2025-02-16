@@ -15,9 +15,10 @@ package object http {
      * * Used in Backend project
      */
     val prefix: PathCodec[Unit]                 = Root / "api" / "v1"
-    val login: PathCodec[Unit]                  = prefix / "login"
-    val randomMessage: PathCodec[Unit]          = prefix / "random-message"
-    val randomMessage2: PathCodec[Unit]         = prefix / "random-message2"
+    val fetchTodoItems: PathCodec[Unit]         = prefix / "fetch-todo-items"
+    val createTodo: PathCodec[Unit]             = prefix / "create-todo"
+    val deleteTodo: PathCodec[String]           = prefix / "delete-todo" / string("id")
+    val updateTodo: PathCodec[Unit]             = prefix / "update-todo"
     val ping: PathCodec[Unit]                   = prefix / "scala"
     val subscribeServerMessage: PathCodec[Unit] = prefix / "subscribe"
   }
@@ -48,9 +49,10 @@ package object http {
     private def generateWsUrl(maybePath: Either[String, zio.http.Path]): String =
       getBackendWebSocketBaseUrl + maybePath.toOption.get.toString
 
-    val login: String                  = generateUrl(PathDef.login.format(()))
-    val randomMessage: String          = generateUrl(PathDef.randomMessage.format(()))
-    val randomMessage2: String         = generateUrl(PathDef.randomMessage2.format(()))
+    val fetchTodoItems: String         = generateUrl(PathDef.fetchTodoItems.format(()))
+    val createTodo: String             = generateUrl(PathDef.createTodo.format(()))
+    def deleteTodo(id: String): String = generateUrl(PathDef.deleteTodo.format(id))
+    val updateTodo: String             = generateUrl(PathDef.updateTodo.format(()))
     val subscribeServerMessage: String = generateWsUrl(PathDef.subscribeServerMessage.format(()))
   }
 }

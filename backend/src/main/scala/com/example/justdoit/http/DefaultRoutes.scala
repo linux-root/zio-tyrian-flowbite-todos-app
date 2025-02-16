@@ -1,16 +1,8 @@
 package com.example.justdoit.http
 
 import com.example.justdoit.common.http.PathDef
-import com.example.justdoit.common.model.LoginFailure
-import com.example.justdoit.common.model.LoginRequest
-import com.example.justdoit.common.model.LoginSuccess
-import com.example.justdoit.common.model.RandomMessage
 import com.example.justdoit.common.util.JwtHelper.UserClaim
-import com.example.justdoit.service.JWTIssuer
-import com.example.justdoit.service.JWTVerifier
-import com.example.justdoit.services.RandomQuotes
-import zio.IO
-import zio.ZIO
+import zio._
 import zio.http.*
 import zio.http.Charsets
 import zio.http.Header.AccessControlAllowOrigin
@@ -28,55 +20,32 @@ import zio.json.JsonDecoder
 import scala.reflect.ClassTag
 import scala.reflect.classTag
 import scala.util.Random
+import com.example.justdoit.common.model.TodoItem
+import com.example.justdoit.common.model.TodoItem.Priority
+import java.time.LocalDateTime
+import com.example.justdoit.common.model.TodoItem.State
+import com.example.justdoit.service.Storage
+import com.example.justdoit.common.model.CreateTodo
+import com.example.justdoit.common.http.PathDef.createTodo
+import com.example.justdoit.common.model.UpdateTodo
+import com.example.justdoit.common.http.PathDef.updateTodo
 
 object DefaultRoutes {
 
-  private def parseBody[T: JsonDecoder: ClassTag](request: Request): IO[Response, T] =
+  private def parseBody[T: JsonDecoder: ClassTag](request: Request, validate: T => Boolean = (_: T) => true): IO[Response, T] =
     for {
       bodyStr <- request.body.asString(Charsets.Utf8).orElseFail(Response.text("Not supported request body format").status(Status.BadRequest))
       result <- ZIO
                   .fromEither[String, T](JsonDecoder[T].decodeJson(bodyStr))
                   .orElseFail(Response.text(s"Cannot parse body as ${classTag[T].runtimeClass.getName}").status(Status.BadRequest))
+      _ <- ZIO.cond(validate(result), result, Response.text("Data is invalid").status(Status.BadRequest))
     } yield result
-
-  private def withAuthMiddleware[R](routes: Routes[R, Nothing]): Routes[JWTVerifier & R, Nothing] = {
-    val authMiddleware: HandlerAspect[JWTVerifier, UserClaim] = Middleware.customAuthProvidingZIO[JWTVerifier, UserClaim](
-      request =>
-        request.header(Header.Authorization) match {
-          case Some(Header.Authorization.Bearer(token)) =>
-            JWTVerifier.decode(token.value.asString).map(Some(_)).mapError { case message =>
-              Response.text(message).status(Status.Unauthorized)
-            }
-
-          case _ => ZIO.none
-        },
-      Headers(Header.WWWAuthenticate.Bearer(realm = "Access"))
-    )
-    routes.@@[JWTVerifier & R](authMiddleware)
-  }
-  private val parseJson: Handler[Any, Response, Request, LoginRequest] =
-    Handler.fromFunctionZIO(parseBody[LoginRequest](_))
-
-  private val processLogin: Handler[JWTIssuer, Nothing, LoginRequest, Response] =
-    val verifyUserLogic =
-      (username: String, password: String) => username.equalsIgnoreCase("Scala") && password == "nopassword" // TODO: Create your own verify logic
-    Handler.fromFunctionZIO { loginRequest =>
-      val valid = verifyUserLogic(loginRequest.username, loginRequest.password)
-      if (valid) {
-        val user = JWTIssuer.User(loginRequest.username)
-        JWTIssuer.issueToken(user).map(issuedToken => Response.json(LoginSuccess(issuedToken, "not-implemented").toJson))
-      } else {
-        ZIO.succeed(Response.json(LoginFailure("Username or Password is not correct").toJson))
-      }
-    }
 
   private val corsMiddleWare =
     cors(
       CorsConfig(
-        allowedOrigin = {
-          case origin if origin == Origin.parse("http://localhost:9876").toOption.get => // TODO: Move to  config
-            Some(AccessControlAllowOrigin.Specific(origin))
-          case _ => None
+        allowedOrigin = { case origin => // TODO: Move to  config
+          Some(AccessControlAllowOrigin.Specific(origin))
         }
       )
     )
@@ -94,23 +63,35 @@ object DefaultRoutes {
           body = Body.fromString(HtmlContent.value)
         )
       ),
-    Method.GET / PathDef.ping ->
-      handler(
-        Response(
-          status = Status.Ok,
-          headers = Headers(Header.ContentType(MediaType.text.html)),
-          body = Body.fromString(HtmlContent.value)
+    Method.GET / PathDef.fetchTodoItems -> handler(
+      for {
+        items <- Storage.getAll
+      } yield Response.json(items.toJson)
+    ),
+    Method.POST / PathDef.createTodo -> Handler.fromFunctionZIO[Request](request =>
+      for {
+        todo        <- parseBody[CreateTodo](request, _.isValid)
+        createdTodo <- Storage.create(todo)
+      } yield Response.json(createdTodo.toJson)
+    ),
+    Method.DELETE / PathDef.deleteTodo -> Handler.fromFunctionZIO[(String, Request)]((id, request) =>
+      for {
+        result <- Storage.delete(id)
+      } yield result.map(id => Response.text(id)).getOrElse(Response.status(Status.BadRequest))
+    ),
+    Method.PUT / PathDef.updateTodo -> Handler.fromFunctionZIO[Request](request =>
+      for {
+        todo        <- parseBody[UpdateTodo](request, _.isValid)
+        updatedTodo <- Storage.update(todo)
+      } yield updatedTodo
+        .map(x =>
+          Response
+            .json(x.toJson)
         )
-      ),
-    Method.POST / PathDef.login ->
-      handler(parseJson >>> processLogin)
-  ) @@ corsMiddleWare
-
-  val authenticated = withAuthMiddleware {
-    Routes(
-      Method.GET / PathDef.randomMessage -> handler(RandomQuotes.getRandomMessage.map(msg => Response.json(RandomMessage(msg).toJson))),
-      Method.GET / PathDef.randomMessage2 -> handler(RandomQuotes.getRandomMessage.map(msg => Response.json(RandomMessage(msg).toJson)))
+        .getOrElse(
+          Response.status(Status.BadRequest)
+        )
     )
-  } @@ corsMiddleWare
+  ) @@ corsMiddleWare
 
 }

@@ -3,70 +3,78 @@ package com.example.justdoit.until
 import com.example.justdoit.common.BuildInfo
 import com.example.justdoit.common.http.BackendApiUrl
 import com.example.justdoit.common.http.PathDef
-import com.example.justdoit.common.model.RandomMessage
-import com.example.justdoit.common.model.LoginFailure
-import com.example.justdoit.common.model.LoginRequest
-import com.example.justdoit.common.model.LoginSuccess
 import com.example.justdoit.model.Msg
-import com.example.justdoit.model.Msg.*
 import com.example.justdoit.until.HttpHelper.ResponseDecoders.*
 import tyrian.Cmd
 import tyrian.http.*
 import zio.Task
 import zio.interop.catz.*
 import zio.json.*
+import com.example.justdoit.util.PrettyLogger
+import com.example.justdoit.common.model.*
 
 object HttpHelper:
 
-  private def sendWithAuthToken[A, R <: Msg](request: Request[A], resultToMessage: Decoder[R]): Cmd[Task, Msg.SendHttpRequestWithAccessToken] =
-    Cmd.Emit(
-      Msg.SendHttpRequestWithAccessToken(accessToken =>
-        Http.send(request.withHeaders(Header("Authorization", s"Bearer $accessToken")), resultToMessage)
-      )
-    )
+  // Side Effect -> controlled effect -> produce Message or no Message
+  val fetchTodoItems: Cmd[Task, Msg.UpdateTodoList | Msg.Error] =
+    val request = Request.get(BackendApiUrl.fetchTodoItems)
+    Http.send(request, todoItemsDecoder)
 
-  def login(username: String, password: String): Cmd[Task, Msg.LoginSuccess | Msg.LoginFailure] = {
-    val body    = LoginRequest(username, password)
-    val request = Request.post(BackendApiUrl.login, Body.json(body.toJson))
-    Http.send(request, loginDecoder)
-  }
+  def createTodo(todo: CreateTodo): Cmd[Task, Msg.NewTodoCreated | Msg.Error] =
+    val body    = Body.json(todo.toJson)
+    val request = Request.post(BackendApiUrl.createTodo, body)
+    Http.send(request, todoItemDecoder)
 
-  val fetchServerMessage: Cmd[Task, Msg.SendHttpRequestWithAccessToken] =
-    fetchServerMessage(BackendApiUrl.randomMessage)
+  def deleteTodo(id: String): Cmd[Task, Msg.TodoDeleted | Msg.Error] =
+    val request = Request(Method.Delete, BackendApiUrl.deleteTodo(id))
+    Http.send(request, deleteItemDecoder)
 
-  val fetchServerMessage2: Cmd[Task, Msg.SendHttpRequestWithAccessToken] =
-    fetchServerMessage(BackendApiUrl.randomMessage2)
-
-  private def fetchServerMessage(apiUrl: String): Cmd[Task, Msg.SendHttpRequestWithAccessToken] = {
-    val request = Request.get(apiUrl)
-    sendWithAuthToken(request, greetDecoder)
-  }
+  def updateTodo(todo: UpdateTodo): Cmd[Task, Msg.TodoUpdated | Msg.Error] =
+    val request = Request(Method.Put, BackendApiUrl.updateTodo, Body.json(todo.toJson))
+    Http.send(request, updateTodoResponseDecoder)
 
   object ResponseDecoders {
 
-    val loginDecoder: Decoder[Msg.LoginSuccess | Msg.LoginFailure] =
-      given JsonDecoder[Either[LoginSuccess, LoginFailure]] =
-        JsonDecoder[LoginSuccess] <+> JsonDecoder[LoginFailure]
+    val todoItemsDecoder: Decoder[Msg.UpdateTodoList | Msg.Error] =
       Decoder(
-        _.body.fromJson[Either[LoginSuccess, LoginFailure]] match {
-          case Right(Left(LoginSuccess(at, rt))) =>
-            Msg.LoginSuccess(at, rt)
-          case Right(Right(LoginFailure(msg))) =>
-            Msg.LoginFailure(msg)
-          case _ =>
-            Msg.LoginFailure("Failed to parse login response")
-        },
-        error => Msg.LoginFailure(s"Server error. Make sure server is running on ${BuildInfo.backendBaseUrl}")
+        response =>
+          response.body.fromJson[List[TodoItem]] match
+            case Right(items) =>
+              Msg.UpdateTodoList(items)
+            case _ =>
+              Msg.UpdateTodoList(Nil)
+        ,
+        _ => Msg.Error(s"Error when loading data. Is server running on ${BuildInfo.backendBaseUrl} ?")
       )
 
-    val greetDecoder: Decoder[Msg.GreetingFromBackend | Msg.Error | Msg.Logout.type] = Decoder(
-      _.body.fromJson[RandomMessage] match {
-        case Right(RandomMessage(text)) =>
-          Msg.GreetingFromBackend(text)
-        case _ =>
-          Msg.Logout
-      },
-      error => Msg.Error(error.toString())
-    )
+    val todoItemDecoder: Decoder[Msg.NewTodoCreated | Msg.Error] =
+      Decoder(
+        response =>
+          response.body.fromJson[TodoItem] match
+            case Right(item) =>
+              Msg.NewTodoCreated(item)
+            case _ =>
+              Msg.Error(response.body)
+        ,
+        _ => Msg.Error("Server error")
+      )
+
+    val deleteItemDecoder: Decoder[Msg.TodoDeleted | Msg.Error] =
+      Decoder(
+        response => if response.status.code == 200 then Msg.TodoDeleted(response.body) else Msg.Error("Item not found"),
+        _ => Msg.Error("Server Error")
+      )
+
+    val updateTodoResponseDecoder: Decoder[Msg.TodoUpdated | Msg.Error] =
+      Decoder(
+        response =>
+          response.body.fromJson[TodoItem] match
+            case Right(todo) =>
+              Msg.TodoUpdated(todo)
+            case _ =>
+              Msg.Error("Cannot parse response")
+        ,
+        _ => Msg.Error("Server error")
+      )
 
   }

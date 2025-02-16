@@ -32,11 +32,7 @@ object LocalStorageHelper:
     val tryLoginFromLocalStorage = ZIO.attempt {
       val accessToken  = dom.window.localStorage.getItem("accessToken")
       val refreshToken = dom.window.localStorage.getItem("refreshToken")
-
-      if (accessToken != null && refreshToken != null)
-        Msg.RestoredSession(accessToken, refreshToken)
-      else
-        Msg.NavigateTo(Page.Login)
+      ???
     }
 
     Cmd.Run(tryLoginFromLocalStorage)
