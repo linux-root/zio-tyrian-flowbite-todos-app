@@ -1,5 +1,4 @@
 logs
-dist
 target
 frontend/node_modules
 *.class
