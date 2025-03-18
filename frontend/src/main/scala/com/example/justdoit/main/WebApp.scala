@@ -59,7 +59,7 @@ object WebApp extends TyrianZIOApp[Msg, Model]:
       (model.modify(_.homeState.todoForm.datepicker).setTo(Some(dp)), Cmd.None)
 
     case Msg.UpdateTodoList(items) =>
-      (model.modify(_.homeState.todoItems).setTo(items), Cmd.None)
+      (model.modify(_.homeState.todoItems).setTo(items), Flowbite.initCmd)
 
     case Msg.LogMessage(msg) =>
       (model, PrettyLogger.info(msg))
